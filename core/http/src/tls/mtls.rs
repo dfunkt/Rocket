@@ -144,7 +144,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, PartialEq)]
 pub struct Certificate<'a> {
     x509: X509Certificate<'a>,
-    data: &'a CertificateData,
+    data: &'a CertificateData<'static>,
 }
 
 /// An X.509 Distinguished Name (DN) found in a [`Certificate`].
@@ -224,9 +224,9 @@ impl<'a> Certificate<'a> {
 
     /// PRIVATE: For internal Rocket use only!
     #[doc(hidden)]
-    pub fn parse(chain: &[CertificateData]) -> Result<Certificate<'_>> {
+    pub fn parse(chain: &'a[CertificateData<'static>]) -> Result<Certificate<'a>> {
         let data = chain.first().ok_or_else(|| Error::Empty)?;
-        let x509 = Certificate::parse_one(&data.0)?;
+        let x509 = Certificate::parse_one(&data.as_ref())?;
         Ok(Certificate { x509, data })
     }
 
@@ -387,7 +387,7 @@ impl<'a> Certificate<'a> {
     /// }
     /// ```
     pub fn as_bytes(&self) -> &'a [u8] {
-        &self.data.0
+        &self.data.as_ref()
     }
 }
 

@@ -75,8 +75,8 @@ impl TlsListener {
     pub async fn bind<R>(addr: SocketAddr, mut c: Config<R>) -> io::Result<TlsListener>
         where R: io::BufRead
     {
-        use rustls::server::{AllowAnyAuthenticatedClient, AllowAnyAnonymousOrAuthenticatedClient};
         use rustls::server::{NoClientAuth, ServerSessionMemoryCache, ServerConfig};
+        use rustls::server::WebPkiClientVerifier;
 
         let cert_chain = load_certs(&mut c.cert_chain)
             .map_err(|e| io::Error::new(e.kind(), format!("bad TLS cert chain: {}", e)))?;
@@ -86,18 +86,16 @@ impl TlsListener {
 
         let client_auth = match c.ca_certs {
             Some(ref mut ca_certs) => match load_ca_certs(ca_certs) {
-                Ok(ca) if c.mandatory_mtls => AllowAnyAuthenticatedClient::new(ca).boxed(),
-                Ok(ca) => AllowAnyAnonymousOrAuthenticatedClient::new(ca).boxed(),
+                Ok(ca) if c.mandatory_mtls => WebPkiClientVerifier::builder(Arc::new(ca))
+                    .build().unwrap(),
+                Ok(ca) => WebPkiClientVerifier::builder(Arc::new(ca))
+                    .allow_unauthenticated().build().unwrap(),
                 Err(e) => return Err(io::Error::new(e.kind(), format!("bad CA cert(s): {}", e))),
             },
-            None => NoClientAuth::boxed(),
+            None => Arc::new(NoClientAuth),
         };
 
         let mut tls_config = ServerConfig::builder()
-            .with_cipher_suites(&c.ciphersuites)
-            .with_safe_default_kx_groups()
-            .with_safe_default_protocol_versions()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bad TLS config: {}", e)))?
             .with_client_cert_verifier(client_auth)
             .with_single_cert(cert_chain, key)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bad TLS config: {}", e)))?;
@@ -110,7 +108,7 @@ impl TlsListener {
         }
 
         tls_config.session_storage = ServerSessionMemoryCache::new(1024);
-        tls_config.ticketer = rustls::Ticketer::new()
+        tls_config.ticketer = rustls::crypto::ring::Ticketer::new()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bad TLS ticketer: {}", e)))?;
 
         let listener = TcpListener::bind(addr).await?;

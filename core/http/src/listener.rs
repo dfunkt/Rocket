@@ -17,10 +17,9 @@ use state::InitCell;
 pub use tokio::net::TcpListener;
 
 /// A thin wrapper over raw, DER-encoded X.509 client certificate data.
-// NOTE: `rustls::Certificate` is exactly isomorphic to `CertificateData`.
 #[doc(inline)]
 #[cfg(feature = "tls")]
-pub use rustls::Certificate as CertificateData;
+pub use rustls::pki_types::CertificateDer as CertificateData;
 
 /// A thin wrapper over raw, DER-encoded X.509 client certificate data.
 #[cfg(not(feature = "tls"))]
@@ -29,8 +28,22 @@ pub struct CertificateData(pub Vec<u8>);
 
 /// A collection of raw certificate data.
 #[derive(Clone, Default)]
+#[cfg(feature = "tls")]
+pub struct Certificates(Arc<InitCell<Vec<CertificateData<'static>>>>);
+
+/// A collection of raw certificate data.
+#[derive(Clone, Default)]
+#[cfg(not(feature = "tls"))]
 pub struct Certificates(Arc<InitCell<Vec<CertificateData>>>);
 
+#[cfg(feature = "tls")]
+impl From<Vec<CertificateData<'static>>> for Certificates {
+    fn from(value: Vec<CertificateData<'static>>) -> Self {
+        Certificates(Arc::new(value.into()))
+    }
+}
+
+#[cfg(not(feature = "tls"))]
 impl From<Vec<CertificateData>> for Certificates {
     fn from(value: Vec<CertificateData>) -> Self {
         Certificates(Arc::new(value.into()))
@@ -38,14 +51,21 @@ impl From<Vec<CertificateData>> for Certificates {
 }
 
 impl Certificates {
-    /// Set the the raw certificate chain data. Only the first call actually
+    /// Set the raw certificate chain data. Only the first call actually
     /// sets the data; the remaining do nothing.
     #[cfg(feature = "tls")]
-    pub(crate) fn set(&self, data: Vec<CertificateData>) {
+    pub(crate) fn set(&self, data: Vec<CertificateData<'static>>) {
         self.0.set(data);
     }
 
     /// Returns the raw certificate chain data, if any is available.
+    #[cfg(feature = "tls")]
+    pub fn chain_data(&self) -> Option<&[CertificateData<'static>]> {
+        self.0.try_get().map(|v| v.as_slice())
+    }
+
+    /// Returns the raw certificate chain data, if any is available.
+    #[cfg(not(feature = "tls"))]
     pub fn chain_data(&self) -> Option<&[CertificateData]> {
         self.0.try_get().map(|v| v.as_slice())
     }

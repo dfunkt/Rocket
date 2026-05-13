@@ -1,55 +1,49 @@
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor};
 
-use rustls::{Certificate, PrivateKey, RootCertStore};
+use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, pem::PemObject, PrivateKeyDer};
+use rustls::pki_types::{PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer};
 
 fn err(message: impl Into<std::borrow::Cow<'static, str>>) -> io::Error {
     io::Error::new(io::ErrorKind::Other, message.into())
 }
 
 /// Loads certificates from `reader`.
-pub fn load_certs(reader: &mut dyn io::BufRead) -> io::Result<Vec<Certificate>> {
-    let certs = rustls_pemfile::certs(reader).map_err(|_| err("invalid certificate"))?;
-    Ok(certs.into_iter().map(Certificate).collect())
+pub fn load_certs(reader: &mut dyn io::Read) -> io::Result<Vec<CertificateDer<'static>>> {
+    CertificateDer::pem_reader_iter(reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| err("invalid certificate"))
 }
 
-/// Load and decode the private key  from `reader`.
-pub fn load_private_key(reader: &mut dyn io::BufRead) -> io::Result<PrivateKey> {
-    // "rsa" (PKCS1) PEM files have a different first-line header than PKCS8
-    // PEM files, use that to determine the parse function to use.
-    let mut header = String::new();
-    let private_keys_fn = loop {
-        header.clear();
-        if reader.read_line(&mut header)? == 0 {
-            return Err(err("failed to find key header; supported formats are: RSA, PKCS8, SEC1"));
-        }
+/// Load and decode the private key from `reader`.
+pub fn load_private_key(reader: &mut dyn io::Read) -> io::Result<PrivateKeyDer<'static>> {
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
 
-        break match header.trim_end() {
-            "-----BEGIN RSA PRIVATE KEY-----" => rustls_pemfile::rsa_private_keys,
-            "-----BEGIN PRIVATE KEY-----" => rustls_pemfile::pkcs8_private_keys,
-            "-----BEGIN EC PRIVATE KEY-----" => rustls_pemfile::ec_private_keys,
-            _ => continue,
-        };
-    };
+    if let Some(key) = PrivatePkcs1KeyDer::pem_reader_iter(&mut Cursor::new(&buf))
+        .flatten().next()
+    {
+        return Ok(PrivateKeyDer::Pkcs1(key));
+    }
+    if let Some(key) = PrivatePkcs8KeyDer::pem_reader_iter(&mut Cursor::new(&buf))
+        .flatten().next()
+    {
+        return Ok(PrivateKeyDer::Pkcs8(key));
+    }
+    if let Some(key) = PrivateSec1KeyDer::pem_reader_iter(&mut Cursor::new(&buf))
+        .flatten().next()
+    {
+        return Ok(PrivateKeyDer::Sec1(key));
+    }
 
-    let key = private_keys_fn(&mut Cursor::new(header).chain(reader))
-        .map_err(|_| err("invalid key file"))
-        .and_then(|mut keys| match keys.len() {
-            0 => Err(err("no valid keys found; is the file malformed?")),
-            1 => Ok(PrivateKey(keys.remove(0))),
-            n => Err(err(format!("expected 1 key, found {}", n))),
-        })?;
-
-    // Ensure we can use the key.
-    rustls::sign::any_supported_type(&key)
-        .map_err(|_| err("key parsed but is unusable"))
-        .map(|_| key)
+    Err(err("failed to find key; supported formats are: RSA, PKCS8, SEC1"))
 }
 
 /// Load and decode CA certificates from `reader`.
 pub fn load_ca_certs(reader: &mut dyn io::BufRead) -> io::Result<RootCertStore> {
-    let mut roots = rustls::RootCertStore::empty();
+    let mut roots = RootCertStore::empty();
     for cert in load_certs(reader)? {
-        roots.add(&cert).map_err(|e| err(format!("CA cert error: {}", e)))?;
+        roots.add(cert).map_err(|e| err(format!("CA cert error: {}", e)))?;
     }
 
     Ok(roots)
